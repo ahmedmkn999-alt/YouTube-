@@ -52,7 +52,33 @@ html, body {
   background:linear-gradient(to top,rgba(0,0,0,0.92),transparent);
   z-index:7; pointer-events:none;
 }
-.interceptor { position:absolute; inset:0; z-index:8; }
+.interceptor { position:absolute; inset:0; z-index:8; cursor:pointer; }
+
+/* ── Poster overlay (hides YouTube logo before play) ── */
+.poster {
+  position:absolute; inset:0; z-index:9;
+  background:#000 center/cover no-repeat;
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer;
+  transition:opacity 0.5s;
+}
+.poster::before {
+  content:'';
+  position:absolute; inset:0;
+  background:linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.4) 100%);
+}
+.poster-btn {
+  position:relative;
+  width:80px; height:80px; border-radius:50%;
+  background:rgba(232,201,122,0.15);
+  border:2px solid rgba(232,201,122,0.6);
+  display:flex; align-items:center; justify-content:center;
+  backdrop-filter:blur(6px);
+  transition:transform 0.25s, background 0.25s;
+}
+.poster:hover .poster-btn { transform:scale(1.12); background:rgba(232,201,122,0.28); }
+.poster-btn svg { width:36px; height:36px; fill:var(--accent); margin-right:-3px; }
+.poster.gone { opacity:0; pointer-events:none; }
 
 /* Controls */
 .controls {
@@ -65,7 +91,7 @@ html, body {
 
 .prog-wrap {
   height:4px; background:var(--bar-bg); border-radius:99px;
-  cursor:pointer; transition:height 0.2s; position:relative;
+  cursor:pointer; transition:height 0.2s; position:relative; direction:ltr;
 }
 .prog-wrap:hover { height:7px; }
 .prog-fill {
@@ -172,6 +198,14 @@ html, body {
   <div class="grad-top"></div>
   <div class="grad-bot"></div>
 
+  <!-- Poster: hides YouTube thumbnail/logo, click to play -->
+  <div class="poster" id="poster"
+       style="background-image:url('https://img.youtube.com/vi/bMK_ZEbU7lg/maxresdefault.jpg')">
+    <div class="poster-btn">
+      <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+    </div>
+  </div>
+
   <div class="spn" id="spn"><div class="sr"></div></div>
 
   <div class="err-box" id="errBox">
@@ -212,83 +246,126 @@ html, body {
   </div>
 </div>
 
-<script src="https://www.youtube.com/iframe_api"></script>
 <script>
-const g=id=>document.getElementById(id);
-const shell=g('shell'),ctrl=g('ctrl'),pw=g('pw'),pf=g('pf'),
-      pb=g('pb'),pi=g('pi'),rp=g('rp'),ri=g('ri'),
-      tt=g('tt'),vs=g('vs'),mb=g('mb'),vi=g('vi'),
-      fs=g('fs'),fi=g('fi'),spn=g('spn'),icp=g('icp'),
-      bb=g('bb'),fb=g('fb'),errBox=g('errBox');
+/* ── تعريف الـ callback قبل تحميل الـ API ── */
+const g = id => document.getElementById(id);
+const shell=g('shell'), ctrl=g('ctrl'), pw=g('pw'), pf=g('pf'),
+      pb=g('pb'), pi=g('pi'), rp=g('rp'), ri=g('ri'),
+      tt=g('tt'), vs=g('vs'), mb=g('mb'), vi=g('vi'),
+      fs=g('fs'), fi=g('fi'), spn=g('spn'), icp=g('icp'),
+      bb=g('bb'), fb=g('fb'), errBox=g('errBox'), poster=g('poster');
 
-let player,dur=0,playing=false,drag=false,hideT,isFS=false;
+let player, dur=0, playing=false, drag=false, hideT, isFS=false;
 const PL='M8 5v14l11-7z', PA='M6 19h4V5H6v14zm8-14v14h4V5h-4z';
 const FI='M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z';
 const FO='M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z';
 const VO='M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z';
 const VX='M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z';
-function setP(el,d){ el.querySelector('path').setAttribute('d',d); }
 
-function onYouTubeIframeAPIReady(){
-  player=new YT.Player('yt',{events:{
-    onReady:e=>{ e.target.setVolume(80); spn.classList.add('gone'); },
-    onStateChange:e=>{
-      const S=YT.PlayerState;
-      if(e.data===S.PLAYING){ playing=true; dur=player.getDuration(); setP(pi,PA); setP(ri,PA); spn.classList.add('gone'); errBox.classList.remove('show'); }
-      else if(e.data===S.PAUSED||e.data===S.ENDED){ playing=false; setP(pi,PL); setP(ri,PL); }
-      else if(e.data===S.BUFFERING){ spn.classList.remove('gone'); }
-    },
-    onError:()=>{ spn.classList.add('gone'); errBox.classList.add('show'); }
-  }});
-}
+function setP(el, d){ el.querySelector('path').setAttribute('d', d); }
 
+/* ── YouTube IFrame API callback ── */
+window.onYouTubeIframeAPIReady = function(){
+  player = new YT.Player('yt', {
+    events:{
+      onReady: e => { e.target.setVolume(80); spn.classList.add('gone'); },
+      onStateChange: e => {
+        const S = YT.PlayerState;
+        if(e.data === S.PLAYING){
+          playing=true; dur=player.getDuration();
+          setP(pi,PA); setP(ri,PA);
+          spn.classList.add('gone');
+          errBox.classList.remove('show');
+          poster.classList.add('gone'); /* إخفاء الـ poster عند التشغيل */
+        } else if(e.data===S.PAUSED || e.data===S.ENDED){
+          playing=false; setP(pi,PL); setP(ri,PL);
+        } else if(e.data===S.BUFFERING){
+          spn.classList.remove('gone');
+        }
+      },
+      onError: () => { spn.classList.add('gone'); errBox.classList.add('show'); }
+    }
+  });
+};
+
+/* ── تحديث شريط التقدم ── */
 setInterval(()=>{
-  if(!player||!player.getCurrentTime||drag)return;
-  const ct=player.getCurrentTime()||0; dur=player.getDuration()||0;
-  if(dur>0)pf.style.width=(ct/dur*100)+'%';
-  tt.textContent=fmt(ct)+' / '+fmt(dur);
-},400);
+  if(!player || !player.getCurrentTime || drag) return;
+  const ct = player.getCurrentTime()||0;
+  dur = player.getDuration()||0;
+  if(dur>0) pf.style.width = (ct/dur*100)+'%';
+  tt.textContent = fmt(ct)+' / '+fmt(dur);
+}, 400);
+
 function fmt(s){ s=Math.floor(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
 
-function toggle(){ if(!player)return; playing?player.pauseVideo():player.playVideo(); flash(); }
+/* ── Play / Pause ── */
+function toggle(){
+  if(!player) return;
+  playing ? player.pauseVideo() : player.playVideo();
+  flash();
+}
 function flash(){ rp.classList.add('show'); setTimeout(()=>rp.classList.remove('show'),500); }
 
-icp.addEventListener('click',toggle);
-pb.addEventListener('click',toggle);
-bb.addEventListener('click',()=>{ if(player)player.seekTo(Math.max(0,player.getCurrentTime()-10),true); });
-fb.addEventListener('click',()=>{ if(player)player.seekTo(player.getCurrentTime()+10,true); });
+/* ── Click handlers ── */
+poster.addEventListener('click', toggle);   /* click poster → play */
+icp.addEventListener('click', toggle);
+pb.addEventListener('click',  toggle);
+bb.addEventListener('click', ()=>{ if(player) player.seekTo(Math.max(0, player.getCurrentTime()-10), true); });
+fb.addEventListener('click', ()=>{ if(player) player.seekTo(player.getCurrentTime()+10, true); });
 
-function doSeek(x){ const r=pw.getBoundingClientRect(),p=Math.max(0,Math.min(1,(x-r.left)/r.width)); pf.style.width=(p*100)+'%'; if(player&&dur)player.seekTo(p*dur,true); }
-pw.addEventListener('mousedown',e=>{ drag=true; doSeek(e.clientX); });
-document.addEventListener('mousemove',e=>{ if(drag)doSeek(e.clientX); });
-document.addEventListener('mouseup',()=>{ drag=false; });
-pw.addEventListener('touchstart',e=>{ drag=true; doSeek(e.touches[0].clientX); },{passive:true});
-document.addEventListener('touchmove',e=>{ if(drag)doSeek(e.touches[0].clientX); },{passive:true});
-document.addEventListener('touchend',()=>{ drag=false; });
+/* ── Progress bar ── */
+function doSeek(x){
+  const r=pw.getBoundingClientRect(), p=Math.max(0,Math.min(1,(x-r.left)/r.width));
+  pf.style.width=(p*100)+'%';
+  if(player && dur) player.seekTo(p*dur, true);
+}
+pw.addEventListener('mousedown', e=>{ drag=true; doSeek(e.clientX); });
+document.addEventListener('mousemove', e=>{ if(drag) doSeek(e.clientX); });
+document.addEventListener('mouseup', ()=>{ drag=false; });
+pw.addEventListener('touchstart', e=>{ drag=true; doSeek(e.touches[0].clientX); },{passive:true});
+document.addEventListener('touchmove', e=>{ if(drag) doSeek(e.touches[0].clientX); },{passive:true});
+document.addEventListener('touchend', ()=>{ drag=false; });
 
-vs.addEventListener('input',()=>{ if(player)player.setVolume(+vs.value); uv(); });
-mb.addEventListener('click',()=>{ if(!player)return; player.isMuted()?(player.unMute(),vs.value=player.getVolume()):(player.mute(),vs.value=0); uv(); });
-function uv(){ setP(vi,(+vs.value===0||(player&&player.isMuted()))?VX:VO); }
+/* ── Volume ── */
+vs.addEventListener('input', ()=>{ if(player) player.setVolume(+vs.value); uv(); });
+mb.addEventListener('click', ()=>{
+  if(!player) return;
+  player.isMuted() ? (player.unMute(), vs.value=player.getVolume()) : (player.mute(), vs.value=0);
+  uv();
+});
+function uv(){ setP(vi, (+vs.value===0 || (player && player.isMuted())) ? VX : VO); }
 
-fs.addEventListener('click',()=>{
+/* ── Fullscreen ── */
+fs.addEventListener('click', ()=>{
   if(!isFS)(shell.requestFullscreen||shell.webkitRequestFullscreen||shell.mozRequestFullScreen).call(shell);
   else(document.exitFullscreen||document.webkitExitFullscreen||document.mozCancelFullScreen).call(document);
 });
-['fullscreenchange','webkitfullscreenchange'].forEach(ev=>document.addEventListener(ev,()=>{ isFS=!!(document.fullscreenElement||document.webkitFullscreenElement); setP(fi,isFS?FO:FI); }));
+['fullscreenchange','webkitfullscreenchange'].forEach(ev=>
+  document.addEventListener(ev, ()=>{
+    isFS = !!(document.fullscreenElement||document.webkitFullscreenElement);
+    setP(fi, isFS?FO:FI);
+  })
+);
 
-function showCtrl(){ ctrl.classList.remove('hidden'); clearTimeout(hideT); if(playing)hideT=setTimeout(()=>ctrl.classList.add('hidden'),3000); }
-shell.addEventListener('mousemove',showCtrl);
-shell.addEventListener('touchstart',showCtrl,{passive:true});
+/* ── Controls auto-hide ── */
+function showCtrl(){ ctrl.classList.remove('hidden'); clearTimeout(hideT); if(playing) hideT=setTimeout(()=>ctrl.classList.add('hidden'),3000); }
+shell.addEventListener('mousemove', showCtrl);
+shell.addEventListener('touchstart', showCtrl, {passive:true});
 
-document.addEventListener('keydown',e=>{
+/* ── Keyboard shortcuts ── */
+document.addEventListener('keydown', e=>{
   if(e.code==='Space'){e.preventDefault();toggle();}
-  if(e.code==='ArrowRight'){if(player)player.seekTo(player.getCurrentTime()+5,true);}
-  if(e.code==='ArrowLeft'){if(player)player.seekTo(Math.max(0,player.getCurrentTime()-5),true);}
-  if(e.code==='ArrowUp'){if(player){player.setVolume(Math.min(100,player.getVolume()+10));vs.value=player.getVolume();uv();}}
-  if(e.code==='ArrowDown'){if(player){player.setVolume(Math.max(0,player.getVolume()-10));vs.value=player.getVolume();uv();}}
-  if(e.code==='KeyF')fs.click();
+  if(e.code==='ArrowRight'){if(player) player.seekTo(player.getCurrentTime()+5,true);}
+  if(e.code==='ArrowLeft') {if(player) player.seekTo(Math.max(0,player.getCurrentTime()-5),true);}
+  if(e.code==='ArrowUp')   {if(player){player.setVolume(Math.min(100,player.getVolume()+10));vs.value=player.getVolume();uv();}}
+  if(e.code==='ArrowDown') {if(player){player.setVolume(Math.max(0,player.getVolume()-10));vs.value=player.getVolume();uv();}}
+  if(e.code==='KeyF') fs.click();
 });
 </script>
+
+<!-- ✅ API script يتحمل بعد تعريف الـ callback -->
+<script src="https://www.youtube.com/iframe_api"></script>
 </body>
-                                   </html>
-                                   
+  </html>
+  
